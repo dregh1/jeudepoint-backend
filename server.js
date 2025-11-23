@@ -36,6 +36,12 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Relai des coups à l'adversaire uniquement
+  socket.on('play:move', ({ code, col, row }) => {
+    if (!code || typeof col !== 'number' || typeof row !== 'number') return;
+    socket.to(code).emit('play:move', { code, col, row });
+  });
+
   socket.on('room:join', ({ code }) => {
     const size = getRoomSize(code);
     if (size === 0) {
