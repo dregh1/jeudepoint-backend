@@ -93,34 +93,40 @@ io.on('connection', (socket) => {
 
   // Coup joué: on ne fait PAS confiance au playerIndex du client,
   // on le déduit via socket.id
-  socket.on('play:move', ({ code, col, row /*, playerIndex (ignoré) */ }) => {
-    const r = rooms.get(code);
-    if (!r) return;
-    if (typeof col !== 'number' || typeof row !== 'number') return;
+  // socket.on('play:move', ({ code, col, row /*, playerIndex (ignoré) */ }) => {
+  //   const r = rooms.get(code);
+  //   if (!r) return;
+  //   if (typeof col !== 'number' || typeof row !== 'number') return;
 
-    const senderIndex = r.players.get(socket.id);
-    if (senderIndex === undefined) {
-      socket.emit('play:error', { message: 'Tu ne fais pas partie de cette room' });
-      return;
-    }
-    if (senderIndex !== r.turn) {
-      socket.emit('play:error', { message: 'Pas ton tour' });
-      return;
-    }
+  //   const senderIndex = r.players.get(socket.id);
+  //   if (senderIndex === undefined) {
+  //     socket.emit('play:error', { message: 'Tu ne fais pas partie de cette room' });
+  //     return;
+  //   }
+  //   if (senderIndex !== r.turn) {
+  //     socket.emit('play:error', { message: 'Pas ton tour' });
+  //     return;
+  //   }
 
-    const nextTurn = (r.turn + 1) % 2;
-    r.turn = nextTurn;
+  //   const nextTurn = (r.turn + 1) % 2;
+  //   r.turn = nextTurn;
 
-    console.log('[play:move]', code, { col, row, playerIndex: senderIndex }, '-> next', nextTurn);
+  //   console.log('[play:move]', code, { col, row, playerIndex: senderIndex }, '-> next', nextTurn);
 
-    // Diffuser à toute la room (y compris l'émetteur)
-    io.to(code).emit('play:move', {
-      code,
-      col,
-      row,
-      playerIndex: senderIndex,
-      nextTurn,
-    });
+  //   // Diffuser à toute la room (y compris l'émetteur)
+  //   io.to(code).emit('play:move', {
+  //     code,
+  //     col,
+  //     row,
+  //     playerIndex: senderIndex,
+  //     nextTurn,
+  //   });
+  // });
+
+   // Relai des coups à l’adversaire uniquement
+   socket.on('play:move', ({ code, col, row }) => {
+    if (!code || typeof col !== 'number' || typeof row !== 'number') return;
+    socket.to(code).emit('play:move', { code, col, row });
   });
 
   // Quitter la room explicitement
