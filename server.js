@@ -106,50 +106,41 @@ io.on('connection', (socket) => {
   // Serveur arbitre: valide, applique, diffuse
   socket.on('play:move', ({ code, col, row } = {}) => {
     const c = normalizeCode(code);
-    console.log('play:move', { from: socket.id, code: c, col, row });
-
+    console.log('[server] play:move received', { from: socket.id, code: c, col, row });
+  
     const r = rooms.get(c);
     if (!r) {
-      console.log('=====> NO room for', c);
       socket.emit('play:error', { message: 'Room inconnue', code: c });
       return;
     }
-
+  
     if (!Number.isFinite(col) || !Number.isFinite(row)) return;
-
+  
     const player = r.players.get(socket.id);
     if (!player) {
       socket.emit('play:error', { message: 'Tu ne fais pas partie de cette room' });
       return;
     }
-
-    // Tour strict
+  
     if (player.index !== r.turn) {
       socket.emit('play:error', { message: 'Pas ton tour' });
       return;
     }
-
-    // Case libre ?
+  
     const key = `${row},${col}`;
     if (r.owner.has(key)) {
       socket.emit('play:error', { message: 'Case déjà prise' });
       return;
     }
     r.owner.set(key, player.index);
-
-    // Prochain tour
+  
     const nextTurn = (r.turn + 1) % 2;
     r.turn = nextTurn;
-
-    console.log('[play:move]', c, { col, row, playerIndex: player.index }, '-> next', nextTurn);
-    io.to(c).emit('play:move', {
-      code: c,
-      col,
-      row,
-      playerIndex: player.index,
-      nextTurn,
-    });
+  
+    console.log('[server] broadcast play:move', { code: c, col, row, playerIndex: player.index, nextTurn });
+    io.to(c).emit('play:move', { code: c, col, row, playerIndex: player.index, nextTurn });
   });
+  
 
   socket.on('room:leave', ({ code } = {}) => {
     const c = normalizeCode(code);
