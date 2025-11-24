@@ -1,151 +1,172 @@
+// server.js
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// code -> { turn: 0|1, players: Map<socketId, number> }
+// code -> {
+//   turn: 0|1,
+//   players: Map<socketId, { index: 0|1 }>,
+//   owner: Map<'row,col', 0|1> // occupation des cases jouées
+// }
 const rooms = new Map();
 
 const app = express();
 app.use(cors());
 
-// Endpoints simples de test
+// Endpoints simples
 app.get('/', (req, res) => res.send('OK'));
 app.get('/health', (req, res) => res.send('OK'));
 
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    // En dev, autoriser large. Tu peux restreindre à 'http://localhost:8100'
-    origin: '*',
+    origin: '*', // restreins à http://localhost:8100 si besoin
     methods: ['GET', 'POST'],
   },
 });
 
 // Helpers
+function normalizeCode(v) {
+  return String(v ?? '').trim();
+}
 function ensureRoom(code) {
   if (!rooms.has(code)) {
-    rooms.set(code, { turn: 0, players: new Map() });
+    rooms.set(code, { turn: 0, players: new Map(), owner: new Map() });
   }
   return rooms.get(code);
 }
-
-function getPlayerIndexForSocket(code, socketId) {
-  const r = rooms.get(code);
-  if (!r) return undefined;
-  return r.players.get(socketId);
+function getFreeIndex(r) {
+  const used = new Set([...r.players.values()].map((p) => p.index));
+  return used.has(0) ? 1 : 0;
 }
 
 io.on('connection', (socket) => {
   console.log('client connected:', socket.id);
 
-  // Création/join factorisé
-  const joinRoomInternal = (code, asCreate = false) => {
+  // Log global utile pour comprendre la séquence
+  socket.onAny((event, payload) => {
+    console.log(`[onAny] ${event} from ${socket.id}`, payload);
+  });
+
+  function joinRoomInternal(codeRaw, asCreate = false) {
+    const code = normalizeCode(codeRaw);
+    if (!code) return;
+
     const r = ensureRoom(code);
+
+    // Déjà membre ? éviter les doubles create/join
+    if (r.players.has(socket.id)) {
+      console.log(`[room:${asCreate ? 'create' : 'join'}] déjà membre`, code, socket.id);
+      socket.emit('room:status', { code, players: r.players.size });
+      if (r.players.size === 2) io.to(code).emit('room:ready', { code, turn: r.turn });
+      return;
+    }
 
     if (r.players.size >= 2) {
       socket.emit('room:error', { message: 'Room complète' });
-      return false;
+      return;
     }
 
-    // Assigner un index: 0 s'il n'y a personne, sinon 1
-    const myIndex = r.players.size === 0 ? 0 : 1;
-
+    const myIndex = getFreeIndex(r);
     socket.join(code);
-    r.players.set(socket.id, myIndex);
+    r.players.set(socket.id, { index: myIndex });
 
-    console.log(`[room:${asCreate ? 'create' : 'join'}]`, code, '=> index', myIndex);
-
+    console.log(`[room:${asCreate ? 'create' : 'join'}]`, code, '=> index', myIndex, 'size', r.players.size);
     io.to(code).emit('room:status', { code, players: r.players.size });
 
-    // Quand on a 2 joueurs, notifier "ready" + tour courant
     if (r.players.size === 2) {
-      io.to(code).emit('room:ready', { code, turn: r.turn }); // 0 = host, 1 = guest
+      io.to(code).emit('room:ready', { code, turn: r.turn });
     }
-    return true;
-  };
+  }
 
-  // Créer une room et y entrer
-  socket.on('room:create', ({ code }) => {
-    if (!code) return;
+  socket.on('room:create', ({ code } = {}) => {
     joinRoomInternal(code, true);
   });
 
-  // Rejoindre une room existante
-  socket.on('room:join', ({ code }) => {
-    if (!code) return;
-    if (!rooms.has(code)) {
+  socket.on('room:join', ({ code } = {}) => {
+    const c = normalizeCode(code);
+    if (!rooms.has(c)) {
       socket.emit('room:error', { message: 'Room introuvable' });
       return;
     }
-    joinRoomInternal(code, false);
+    joinRoomInternal(c, false);
   });
 
-  // Demander l'état courant (tour, nb joueurs)
-  socket.on('room:state', ({ code }) => {
-    const r = rooms.get(code);
+  socket.on('room:state', ({ code } = {}) => {
+    const c = normalizeCode(code);
+    const r = rooms.get(c);
     if (!r) {
       socket.emit('room:error', { message: 'Room introuvable' });
       return;
     }
-    socket.emit('room:state', { code, turn: r.turn, players: r.players.size });
+    socket.emit('room:state', { code: c, turn: r.turn, players: r.players.size });
   });
 
-  // Coup joué: on ne fait PAS confiance au playerIndex du client,
-  // on le déduit via socket.id
-  // socket.on('play:move', ({ code, col, row /*, playerIndex (ignoré) */ }) => {
-  //   const r = rooms.get(code);
-  //   if (!r) return;
-  //   if (typeof col !== 'number' || typeof row !== 'number') return;
+  // Serveur arbitre: valide, applique, diffuse
+  socket.on('play:move', ({ code, col, row } = {}) => {
+    const c = normalizeCode(code);
+    console.log('play:move', { from: socket.id, code: c, col, row });
 
-  //   const senderIndex = r.players.get(socket.id);
-  //   if (senderIndex === undefined) {
-  //     socket.emit('play:error', { message: 'Tu ne fais pas partie de cette room' });
-  //     return;
-  //   }
-  //   if (senderIndex !== r.turn) {
-  //     socket.emit('play:error', { message: 'Pas ton tour' });
-  //     return;
-  //   }
+    const r = rooms.get(c);
+    if (!r) {
+      console.log('=====> NO room for', c);
+      socket.emit('play:error', { message: 'Room inconnue', code: c });
+      return;
+    }
 
-  //   const nextTurn = (r.turn + 1) % 2;
-  //   r.turn = nextTurn;
+    if (!Number.isFinite(col) || !Number.isFinite(row)) return;
 
-  //   console.log('[play:move]', code, { col, row, playerIndex: senderIndex }, '-> next', nextTurn);
+    const player = r.players.get(socket.id);
+    if (!player) {
+      socket.emit('play:error', { message: 'Tu ne fais pas partie de cette room' });
+      return;
+    }
 
-  //   // Diffuser à toute la room (y compris l'émetteur)
-  //   io.to(code).emit('play:move', {
-  //     code,
-  //     col,
-  //     row,
-  //     playerIndex: senderIndex,
-  //     nextTurn,
-  //   });
-  // });
+    // Tour strict
+    if (player.index !== r.turn) {
+      socket.emit('play:error', { message: 'Pas ton tour' });
+      return;
+    }
 
-   // Relai des coups à l’adversaire uniquement
-   socket.on('play:move', ({ code, col, row }) => {
-    if (!code || typeof col !== 'number' || typeof row !== 'number') return;
-    socket.to(code).emit('play:move', { code, col, row });
+    // Case libre ?
+    const key = `${row},${col}`;
+    if (r.owner.has(key)) {
+      socket.emit('play:error', { message: 'Case déjà prise' });
+      return;
+    }
+    r.owner.set(key, player.index);
+
+    // Prochain tour
+    const nextTurn = (r.turn + 1) % 2;
+    r.turn = nextTurn;
+
+    console.log('[play:move]', c, { col, row, playerIndex: player.index }, '-> next', nextTurn);
+    io.to(c).emit('play:move', {
+      code: c,
+      col,
+      row,
+      playerIndex: player.index,
+      nextTurn,
+    });
   });
 
-  // Quitter la room explicitement
-  socket.on('room:leave', ({ code }) => {
-    const r = rooms.get(code);
-    socket.leave(code);
-    if (r) {
-      r.players.delete(socket.id);
-      io.to(code).emit('room:status', { code, players: r.players.size });
+  socket.on('room:leave', ({ code } = {}) => {
+    const c = normalizeCode(code);
+    const r = rooms.get(c);
+    socket.leave(c);
+    if (!r) return;
+
+    if (r.players.delete(socket.id)) {
+      io.to(c).emit('room:status', { code: c, players: r.players.size });
       if (r.players.size === 0) {
-        rooms.delete(code);
+        rooms.delete(c);
       } else {
-        // Simple reset pour éviter un "tour fantôme"
         r.turn = 0;
       }
     }
   });
 
-  // Déconnexion: nettoyer toutes les rooms où le socket était
   socket.on('disconnect', () => {
     console.log('client disconnected:', socket.id);
     for (const [code, r] of rooms.entries()) {
@@ -162,11 +183,8 @@ io.on('connection', (socket) => {
   });
 });
 
-// Démarrage du serveur
 const PORT = 3001;
-server.on('error', (err) => {
-  console.error('HTTP server error:', err);
-});
+server.on('error', (err) => console.error('HTTP server error:', err));
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Socket.IO server running on http://localhost:${PORT}`);
 });
