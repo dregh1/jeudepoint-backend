@@ -3,6 +3,7 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const { log } = require('console');
 
 // code -> {
 //   turn: 0|1,
@@ -10,6 +11,7 @@ const cors = require('cors');
 //   owner: Map<'row,col', 0|1> // occupation des cases jouées
 // }
 const rooms = new Map();
+const DEFAULT_CONFIG = { cols: 11, rows: 11 };
 
 const app = express();
 app.use(cors());
@@ -27,15 +29,28 @@ const io = new Server(server, {
 });
 
 // Helpers
+
+function sanitizeConfig(c = {}) {
+  let cols = Number(c.cols), rows = Number(c.rows);
+  if (!Number.isFinite(cols) || cols < 2) cols = DEFAULT_CONFIG.cols;
+  if (!Number.isFinite(rows) || rows < 2) rows = DEFAULT_CONFIG.rows;
+  cols = Math.min(Math.max(2, Math.floor(cols)), 50);
+  rows = Math.min(Math.max(2, Math.floor(rows)), 50);
+  return { cols, rows };
+}
+
+
 function normalizeCode(v) {
   return String(v ?? '').trim();
 }
+
 function ensureRoom(code) {
   if (!rooms.has(code)) {
-    rooms.set(code, { turn: 0, players: new Map(), owner: new Map() });
+    rooms.set(code, { turn: 0, players: new Map(), owner: new Map(), config: undefined });
   }
   return rooms.get(code);
 }
+
 function getFreeIndex(r) {
   const used = new Set([...r.players.values()].map((p) => p.index));
   return used.has(0) ? 1 : 0;
@@ -49,17 +64,22 @@ io.on('connection', (socket) => {
     console.log(`[onAny] ${event} from ${socket.id}`, payload);
   });
 
-  function joinRoomInternal(codeRaw, asCreate = false) {
+  function joinRoomInternal(codeRaw, asCreate = false, configInput) {
+    console.log("~#~",configInput);
     const code = normalizeCode(codeRaw);
     if (!code) return;
 
     const r = ensureRoom(code);
 
-    // Déjà membre ? éviter les doubles create/join
+    if (asCreate && configInput && !r.config) {
+      r.config = sanitizeConfig(configInput);
+    }
+    if (!r.config) r.config = { ...DEFAULT_CONFIG };
+
     if (r.players.has(socket.id)) {
       console.log(`[room:${asCreate ? 'create' : 'join'}] déjà membre`, code, socket.id);
-      socket.emit('room:status', { code, players: r.players.size });
-      if (r.players.size === 2) io.to(code).emit('room:ready', { code, turn: r.turn });
+      socket.emit('room:status', { code, players: r.players.size, config: r.config });
+      if (r.players.size === 2) io.to(code).emit('room:ready', { code, turn: r.turn, config: r.config });
       return;
     }
 
@@ -73,15 +93,17 @@ io.on('connection', (socket) => {
     r.players.set(socket.id, { index: myIndex });
 
     console.log(`[room:${asCreate ? 'create' : 'join'}]`, code, '=> index', myIndex, 'size', r.players.size);
-    io.to(code).emit('room:status', { code, players: r.players.size });
+    io.to(code).emit('room:status', { code, players: r.players.size, config: r.config });
 
     if (r.players.size === 2) {
-      io.to(code).emit('room:ready', { code, turn: r.turn });
+      io.to(code).emit('room:ready', { code, turn: r.turn, config: r.config });
     }
   }
 
-  socket.on('room:create', ({ code } = {}) => {
-    joinRoomInternal(code, true);
+
+  socket.on('room:create', ({ code , config } = {}) => {
+    console.log("###",config);
+    joinRoomInternal(code, true, config);
   });
 
   socket.on('room:join', ({ code } = {}) => {
@@ -100,7 +122,7 @@ io.on('connection', (socket) => {
       socket.emit('room:error', { message: 'Room introuvable' });
       return;
     }
-    socket.emit('room:state', { code: c, turn: r.turn, players: r.players.size });
+    socket.emit('room:state', { code: c, turn: r.turn, players: r.players.size, config: r.config || DEFAULT_CONFIG });
   });
 
   // Serveur arbitre: valide, applique, diffuse
