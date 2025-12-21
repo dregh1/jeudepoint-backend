@@ -11,14 +11,10 @@ const gameUtils = require('./src/utils/gameUtils');
 app.use(cors());
 
 
-// Endpoints simples
-// app.get('/', (req, res) => res.send('OK'));
-// app.get('/health', (req, res) => res.send('OK'));
-
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*', // restreins à http://localhost:8100 si besoin
+    origin: "https://jeu-de-point.vercel.app",
     methods: ['GET', 'POST'],
   },
 });
