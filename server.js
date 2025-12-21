@@ -5,11 +5,8 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const { log } = require('console');
 
-// code -> {
-//   turn: 0|1,
-//   players: Map<socketId, { index: 0|1 }>,
-//   owner: Map<'row,col', 0|1> // occupation des cases jouées
-// }
+const gameUtils = require('./src/utils/gameUtils');
+
 const rooms = new Map();
 const DEFAULT_CONFIG = { cols: 11, rows: 11 };
 
@@ -27,22 +24,6 @@ const io = new Server(server, {
     methods: ['GET', 'POST'],
   },
 });
-
-// Helpers
-
-function sanitizeConfig(c = {}) {
-  let cols = Number(c.cols), rows = Number(c.rows);
-  if (!Number.isFinite(cols) || cols < 2) cols = DEFAULT_CONFIG.cols;
-  if (!Number.isFinite(rows) || rows < 2) rows = DEFAULT_CONFIG.rows;
-  cols = Math.min(Math.max(2, Math.floor(cols)), 50);
-  rows = Math.min(Math.max(2, Math.floor(rows)), 50);
-  return { cols, rows };
-}
-
-
-function normalizeCode(v) {
-  return String(v ?? '').trim();
-}
 
 function ensureRoom(code) {
   if (!rooms.has(code)) {
@@ -66,13 +47,13 @@ io.on('connection', (socket) => {
 
   function joinRoomInternal(codeRaw, asCreate = false, configInput) {
     console.log("~#~",configInput);
-    const code = normalizeCode(codeRaw);
+    const code = gameUtils.normalizeCode(codeRaw);
     if (!code) return;
 
     const r = ensureRoom(code);
 
     if (asCreate && configInput && !r.config) {
-      r.config = sanitizeConfig(configInput);
+      r.config = gameUtils.sanitizeConfig(configInput);
     }
     if (!r.config) r.config = { ...DEFAULT_CONFIG };
 
@@ -107,16 +88,16 @@ io.on('connection', (socket) => {
   });
 
   socket.on('room:join', ({ code } = {}) => {
-    const c = normalizeCode(code);
+    const c = gameUtils.normalizeCode(code);
     if (!rooms.has(c)) {
       socket.emit('room:error', { message: 'Room introuvable' });
       return;
     }
-    joinRoomInternal(c, false);
+    joinRoomInternal(c, false);  
   });
 
   socket.on('room:state', ({ code } = {}) => {
-    const c = normalizeCode(code);
+    const c = gameUtils.normalizeCode(code);
     const r = rooms.get(c);
     if (!r) {
       socket.emit('room:error', { message: 'Room introuvable' });
@@ -127,7 +108,7 @@ io.on('connection', (socket) => {
 
   // Serveur arbitre: valide, applique, diffuse
   socket.on('play:move', ({ code, col, row } = {}) => {
-    const c = normalizeCode(code);
+    const c = gameUtils.normalizeCode(code);
     console.log('[server] play:move received', { from: socket.id, code: c, col, row });
   
     const r = rooms.get(c);
@@ -165,7 +146,7 @@ io.on('connection', (socket) => {
   
 
   socket.on('room:leave', ({ code } = {}) => {
-    const c = normalizeCode(code);
+    const c = gameUtils.normalizeCode(code);
     const r = rooms.get(c);
     socket.leave(c);
     if (!r) return;
