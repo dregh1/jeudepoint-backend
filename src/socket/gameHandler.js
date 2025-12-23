@@ -15,6 +15,37 @@ module.exports = (io, socket) => {
         return used.has(0) ? 1 : 0;
       }
 
+    function handlePlayerDeparture(code) {
+        const r = rooms.get(code);
+        if (!r) return;
+
+        const wasFull = r.players.size === 2;
+
+        // On supprime le joueur
+        if (r.players.delete(socket.id)) {
+            console.log(`[room:leave] ${socket.id} left ${code}. Remaining: ${r.players.size}`);
+
+            // CAS 1: Il reste un seul joueur (Abandon)
+            if (r.players.size === 1) {
+                // On informe le joueur restant qu'il a gagné par abandon
+                io.to(code).emit('room:abandoned', {
+                    code,
+                    message: "Your opponent has left the game."
+                });
+                // Note: On peut garder la room ou la supprimer selon votre logique
+                // r.turn = 0; 
+            }
+
+            // CAS 2: Plus aucun joueur
+            if (r.players.size === 0) {
+                rooms.delete(code);
+                console.log(`[room:delete] ${code} is now empty and deleted.`);
+            }
+
+            // Mise à jour classique du statut pour les autres
+            io.to(code).emit('room:status', { code, players: r.players.size });
+        }
+    }
 
     function joinRoomInternal(codeRaw, asCreate = false, configInput) {
         console.log("~#~", configInput);
@@ -117,31 +148,15 @@ module.exports = (io, socket) => {
 
     socket.on('room:leave', ({ code } = {}) => {
         const c = gameUtils.normalizeCode(code);
-        const r = rooms.get(c);
+        handlePlayerDeparture(c);
         socket.leave(c);
-        if (!r) return;
-
-        if (r.players.delete(socket.id)) {
-            io.to(c).emit('room:status', { code: c, players: r.players.size });
-            if (r.players.size === 0) {
-                rooms.delete(c);
-            } else {
-                r.turn = 0;
-            }
-        }
     });
 
     socket.on('disconnect', () => {
         console.log('client disconnected:', socket.id);
         for (const [code, r] of rooms.entries()) {
             if (r.players.has(socket.id)) {
-                r.players.delete(socket.id);
-                io.to(code).emit('room:status', { code, players: r.players.size });
-                if (r.players.size === 0) {
-                    rooms.delete(code);
-                } else {
-                    r.turn = 0;
-                }
+                handlePlayerDeparture(code);
             }
         }
     });
