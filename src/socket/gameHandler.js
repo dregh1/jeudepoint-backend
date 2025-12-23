@@ -26,24 +26,24 @@ module.exports = (io, socket) => {
             console.log(`[room:leave] ${socket.id} left ${code}. Remaining: ${r.players.size}`);
 
             // CAS 1: Il reste un seul joueur (Abandon)
-            if (r.players.size === 1) {
+            if (wasFull && r.players.size === 1) {
                 // On informe le joueur restant qu'il a gagné par abandon
                 io.to(code).emit('room:abandoned', {
                     code,
                     message: "Your opponent has left the game."
                 });
                 // Note: On peut garder la room ou la supprimer selon votre logique
-                // r.turn = 0; 
+                r.owner.clear(); 
+                r.turn = 0;
             }
 
             // CAS 2: Plus aucun joueur
             if (r.players.size === 0) {
                 rooms.delete(code);
                 console.log(`[room:delete] ${code} is now empty and deleted.`);
+            } else {
+                io.to(code).emit('room:status', { code, players: r.players.size });
             }
-
-            // Mise à jour classique du statut pour les autres
-            io.to(code).emit('room:status', { code, players: r.players.size });
         }
     }
 
